@@ -1,25 +1,71 @@
+# Docker Compose 配置文件版本
 version: "3.9"
 
 services:
-  database:
-    image: postgres:latest
-    restart: always
-    environment:
-      POSTGRES_PASSWORD: verySecretPassword
-      POSTGRES_USER: administrator
-      POSTGRES_DB: todo
+ # 数据库服务：使用 PostgreSQL
+ database:
+   image: postgres:latest
+   restart: always
+   environment:
+     # 数据库密码
+     POSTGRES_PASSWORD: verySecretPassword
+     # 数据库用户名
+     POSTGRES_USER: administrator
+     # 数据库名称
+     POSTGRES_DB: todo
 
-  app:
-    build:
-      context: .
-      dockerfile: Dockerfile.dev
-    restart: always
-    volumes:
-      - ./todo:/app/todo
-    environment:
-      SQLALCHEMY_DATABASE_URI: postgresql://administrator:verySecretPassword@database:5432/todo
-    ports:
-      - "6400:6400"
-    depends_on:
-      - database
+ # 应用服务：Flask 主应用
+ app:
+   build:
+     # 构建上下文为当前目录
+     context: .
+     # 使用开发环境 Dockerfile
+     dockerfile: Dockerfile.dev
+   restart: always
+   volumes:
+     # 挂载本地 todo 目录到容器
+     - ./todo:/app/todo
+   # 加载 AWS 凭证环境变量文件
+   env_file: 
+     - aws.env
+   environment:
+     # 数据库连接 URI
+     SQLALCHEMY_DATABASE_URI: postgresql://administrator:verySecretPassword@database:5432/todo
+     # 使用 SQS 作为 Celery 消息代理
+     CELERY_BROKER_URL: sqs://
+     # 使用 PostgreSQL 作为 Celery 结果后端
+     CELERY_RESULT_BACKEND: db+postgresql://administrator:verySecretPassword@database:5432/todo
+   # 端口映射
+   ports:
+     - "6400:6400"
+   # 依赖服务
+   depends_on:
+     - database
+     - redis
 
+ # Redis 服务：作为本地消息队列
+ redis:
+   image: redis:latest
+   restart: always
+   ports:
+     - "6379:6379"
+
+ # Celery Worker 服务
+ worker:
+   build:
+     context: .
+     dockerfile: Dockerfile.dev
+   restart: always
+   volumes:
+     # 挂载本地 todo 目录到容器
+     - ./todo:/app/todo
+   # 加载 AWS 凭证环境变量文件
+   env_file: 
+     - aws.env
+   environment:
+     # 使用 SQS 作为 Celery 消息代理
+     CELERY_BROKER_URL: sqs://
+     # 使用 PostgreSQL 作为 Celery 结果后端
+     CELERY_RESULT_BACKEND: db+postgresql://administrator:verySecretPassword@database:5432/todo
+   # 启动 Celery Worker 的命令
+   command: poetry run celery --app todo.tasks.ical worker --loglevel=info
